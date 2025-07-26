@@ -1,5 +1,5 @@
 
-#include "header/Filter.h"
+#include "header/FlipFilter.h"
 #include "header/Couper.h"
 #include "header/CouponFilter.h"
 #include "header/LogLogFilter_Spread.h"
@@ -249,7 +249,7 @@ int main() {
 
         std::cout << "\n" << "FlipFilter + vHLL: " << std::endl;
         vHLL *skt_filter = new vHLL(sketch_memo);
-        Filter *filter = new Filter(filter_memo, skt_filter);
+        FlipFilter *filter = new FlipFilter(filter_memo, skt_filter);
         filter->spreadEstimation(dataset, true_cardinality);
         delete filter;
         delete skt_filter;

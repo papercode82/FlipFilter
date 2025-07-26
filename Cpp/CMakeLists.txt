@@ -18,4 +18,4 @@ add_executable(FlipFilter main.cpp
         header/HLLSampler.h
         HLLSampler.cpp
         header/KjSkt.h
-        Filter.cpp)
+        FlipFilter.cpp)
