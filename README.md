@@ -10,8 +10,7 @@ This repository provides a full implementation of FlipFilter in both C++ and P4,
 
 > FlipFilter/  
 > ├── Cpp/ # C++ implementation of FlipFilter and associated experiments  
-> ├── P4 Implementation/ # P4-16 implementation
-> ├── dataset/ # Sample datasets and download instructions  
+> ├── P4 Implementation/ # P4-16 implementation <br>├── dataset/ # Sample datasets and download instructions  
 > └── README.md # Project documentation
 
 ---
