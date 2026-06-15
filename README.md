@@ -14,12 +14,7 @@ FlipFilter/
 
 ## C++ Implementation
 
-The `Cpp/` directory includes FlipFilter and the baseline filters used in the evaluation:
-
-- FlipFilter
-- Couper
-- CouponFilter
-- LogLogFilter_Spread
+The `Cpp/` directory includes FlipFilter and the baseline filters used in the evaluation.
 
 The C++ driver runs the experiments for per-flow spread estimation and super spreader detection with the default configuration.
 
