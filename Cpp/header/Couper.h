@@ -2,6 +2,7 @@
 #define COUPER_H
 
 #include "Sketch.h"
+#include "BaseSketchType.h"
 #include <iostream>
 #include <vector>
 
@@ -16,37 +17,19 @@ private:
     uint32_t tau; // Threshold
     std::vector<std::vector<bool>> filter; // use vector to implement bitmaps with vary size
     Sketch* sketch; // Pointer to an external Sketch (e.g., HyperLogLog)
+    std::unordered_set<uint32_t> passed_;
 
 public:
 
-    Couper(float memory_kb, Sketch* skt);
+    Couper(float memory_kb, float f_ratio, BaseSketchType base_sketch_type = BaseSketchType::FreeRS);
 
-    ~Couper() {
-
+    ~Couper() override {
+        delete sketch;
     }
 
-    // Placeholder for update and query functions
     void update(const uint32_t key, const uint32_t element);
-
-    uint32_t query(const uint32_t key);  // query the spread for given key
-
-    void spreadEstimation(
-            const std::vector<std::pair<uint32_t, uint32_t>>& dataset,
-            const std::unordered_map<uint32_t, std::unordered_set<uint32_t>>& true_cardi);
-
-
-    // for super spreader detection
+    uint32_t query(const uint32_t key);
     std::unordered_map<uint32_t, uint32_t> detect(uint32_t threshold);
-
-    void SSDetection(
-            const std::vector<std::pair<uint32_t, uint32_t>>& dataset,
-            const std::unordered_map<uint32_t, std::unordered_set<uint32_t>>& true_cardi,
-            const std::vector<uint32_t> thresholds);
-
-
-    void throughput(const std::vector<std::pair<uint32_t, uint32_t>>& dataset,
-                    const std::unordered_map<uint32_t, std::unordered_set<uint32_t>>& true_cardi);
-
     uint32_t que(const uint32_t key);
     std::unordered_map<uint32_t, uint32_t> candidates();
 

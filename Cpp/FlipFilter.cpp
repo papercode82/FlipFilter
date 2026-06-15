@@ -1,38 +1,115 @@
-#include "header/FlipFilter.h"
+
 #include <iostream>
-#include <fstream>
-#include <chrono>
+#include <stdexcept>
+#include "header/FlipFilter.h"
+#include "header/SuperKjSkt.h"
+#include "header/KjSkt.h"
+#include "header/vHLL.h"
+#include "header/rSkt.h"
+#include "header/FreeRS.h"
 
+namespace {
+inline uint32_t fastMix32(uint32_t value) {
+    value ^= value >> 16;
+    value *= 0x7feb352dU;
+    value ^= value >> 15;
+    value *= 0x846ca68bU;
+    value ^= value >> 16;
+    return value;
+}
+}
 
+FlipFilter::FlipFilter(float memory_kb, float f_ratio, int layers,
+                       const std::vector<int>& bitmap_sizes,
+                       float ratio_threshold,
+                       const std::vector<float>& memory_ratios,
+                       uint32_t distribute_num,
+                       BaseSketchType base_sketch_type)
+        : layers_(layers), bitmap_sizes_(bitmap_sizes), ratio_threshold_(ratio_threshold),
+        distribution_(0.0f, 1.0f) {
 
-FlipFilter::FlipFilter(float memory_kb, Sketch* skt)
-        :sketch(skt), distribution_(0.0f, 1.0f) {
-    layers_ = 2;
-    bitmap_sizes_ = {4, 8};
-    ratio_threshold_ = 0.6;
-    std::vector<float> memory_ratios = {0.5, 0.5};
-    distribute_num = 3;
-    // bytes to bits
-    uint32_t memory_bits = static_cast<uint32_t>(std::round(memory_kb * 1024 * 8));
-    num_bitmaps_.resize(layers_);
-    filter_.resize(layers_);
-    for (size_t i = 0; i < layers_; ++i) {
-        uint32_t memory_bits_layer = static_cast<uint32_t>(std::round(memory_bits * memory_ratios[i]));
+    if (layers_ <= 0) {
+        throw std::invalid_argument("FlipFilter requires at least one layer.");
+    }
+    if (bitmap_sizes_.size() < static_cast<size_t>(layers_)) {
+        throw std::invalid_argument("bitmap_sizes must contain one size per layer.");
+    }
+    if (memory_ratios.size() < static_cast<size_t>(layers_)) {
+        throw std::invalid_argument("memory_ratios must contain one ratio per layer.");
+    }
+    if (f_ratio <= 0.0f || f_ratio >= 1.0f) {
+        throw std::invalid_argument("Filter memory ratio must be in (0, 1).");
+    }
+    if (distribute_num == 0) {
+        throw std::invalid_argument("distribute_num must be greater than 0.");
+    }
+
+    float filter_m = memory_kb * f_ratio;
+    uint32_t skt_memo = static_cast<uint32_t>(std::round(memory_kb - filter_m));
+    if (skt_memo == 0) {
+        throw std::invalid_argument("Sketch memory is zero. Reduce filter memory ratio or increase total memory.");
+    }
+
+    switch (base_sketch_type) {
+        case BaseSketchType::VHLL:
+            std::cout << "\n" << "FlipFilter + vHLL: " << std::endl;
+            sketch = new vHLL(skt_memo);
+            break;
+        case BaseSketchType::KjSkt:
+            std::cout << "\n" << "FlipFilter + KjSkt: " << std::endl;
+            sketch = new KjSkt(skt_memo);
+            break;
+        case BaseSketchType::SuperKjSkt:
+            std::cout << "\n" << "FlipFilter + SuperKjSkt: " << std::endl;
+            sketch = new SuperKjSkt(skt_memo);
+            break;
+        case BaseSketchType::RSkt:
+            std::cout << "\n" << "FlipFilter + rSkt: " << std::endl;
+            sketch = new rSkt(skt_memo);
+            break;
+        case BaseSketchType::FreeRS:
+            std::cout << "\n" << "FlipFilter + FreeRS: " << std::endl;
+            sketch = new FreeRS(skt_memo);
+            break;
+    }
+
+    uint32_t filter_bits = static_cast<uint32_t>(std::round(filter_m * 1024 * 8));
+    num_bitmaps_.resize(layers);
+    bitmap_index_masks_.resize(layers, 0);
+    pass_count_thresholds_.resize(layers);
+    filter_.resize(layers);
+    for (size_t i = 0; i < layers; ++i) {
+        if (bitmap_sizes_[i] <= 0) {
+            throw std::invalid_argument("Bitmap size must be greater than 0.");
+        }
+        if (memory_ratios[i] <= 0.0f) {
+            throw std::invalid_argument("Layer memory ratio must be greater than 0.");
+        }
+        uint32_t memory_bits_layer = static_cast<uint32_t>(std::round(filter_bits * memory_ratios[i]));
         num_bitmaps_[i] = memory_bits_layer / bitmap_sizes_[i];
+        if (num_bitmaps_[i] == 0) {
+            throw std::runtime_error("A FlipFilter layer has zero bitmaps. Increase memory or reduce bitmap size.");
+        }
+        if ((bitmap_sizes_[i] & (bitmap_sizes_[i] - 1)) == 0) {
+            bitmap_index_masks_[i] = static_cast<uint32_t>(bitmap_sizes_[i] - 1);
+        }
+        pass_count_thresholds_[i] = static_cast<uint32_t>(std::floor(ratio_threshold_ * bitmap_sizes_[i])) + 1U;
         filter_[i].resize(num_bitmaps_[i], BitmapEncap(bitmap_sizes_[i], distribution_, generator_));
     }
+    this->distribute_num = distribute_num;
     hash_seeds = generateSeeds32(distribute_num);
 }
 
 
+FlipFilter::~FlipFilter() {
+    delete sketch;
+}
 
 
 std::vector<uint32_t> FlipFilter::generateSeeds32(size_t count) {
     std::vector<uint32_t> seeds;
     seeds.reserve(count);
-    std::random_device rd;
-    std::mt19937 gen(rd() ^ static_cast<unsigned>(
-            std::chrono::high_resolution_clock::now().time_since_epoch().count()));
+    std::mt19937 gen(1337);
     std::uniform_int_distribution<uint32_t> dist((1U << 24), std::numeric_limits<uint32_t>::max());
     for (size_t i = 0; i < count; ++i) {
         seeds.push_back(dist(gen));
@@ -43,10 +120,8 @@ std::vector<uint32_t> FlipFilter::generateSeeds32(size_t count) {
 
 
 bool FlipFilter::getOp(uint32_t label, uint32_t b_index) {
-    uint32_t hash_value = 0;
-    MurmurHash3_x86_32(&label, sizeof(label), HASH_SEED + b_index, &hash_value);
-    bool op_ = (hash_value & 1) != 0;
-    return op_;
+    uint32_t mixed = label ^ (b_index * 0x9e3779b9U) ^ HASH_SEED;
+    return (fastMix32(mixed) & 1U) != 0;
 }
 
 
@@ -54,27 +129,31 @@ bool FlipFilter::getOp(uint32_t label, uint32_t b_index) {
 void FlipFilter::update(uint32_t label, uint32_t element) {
     uint32_t element_hash_val;
     MurmurHash3_x86_32(&element, sizeof(element), HASH_SEED, &element_hash_val);
-    // chose a hash function by element, the same element (for the same flow) will enter the same bucket
     uint32_t seed_idx = element_hash_val % distribute_num;
+
     uint32_t key_hash_val;
     MurmurHash3_x86_32(&label, sizeof(label), hash_seeds[seed_idx], &key_hash_val);
+
     for (int l = 0; l < layers_; ++l) {
         uint32_t b_idx = key_hash_val % num_bitmaps_[l];
-        bool op_ = getOp(label, b_idx); // true : 1
-        uint32_t bit_idx = element_hash_val % bitmap_sizes_[l];
-        filter_[l][b_idx].bitmap[bit_idx] = op_;  // Set this bit
-        int same_direction_count = 0;
-        for (bool bit: filter_[l][b_idx].bitmap) {
-            if (bit == op_) {
-                same_direction_count++;
-            }
-        }
-        float ratio = static_cast<float>(same_direction_count) / bitmap_sizes_[l];
-        if (ratio <= ratio_threshold_) {
-            return; // End the insertion process
+        bool op_ = getOp(label, b_idx);
+        uint32_t bit_idx = bitmap_index_masks_[l] != 0
+                           ? (element_hash_val & bitmap_index_masks_[l])
+                           : (element_hash_val % bitmap_sizes_[l]);
+        auto& bucket = filter_[l][b_idx];
+        bucket.setBit(bit_idx, op_);
+        uint32_t same_direction_count = bucket.sameDirectionCount(op_);
+        if (same_direction_count < pass_count_thresholds_[l]) {
+            return;
         }
     }
-    sketch ->update(label, element);
+    passed_.insert(label);
+    sketch->update(label, element);
+}
+
+
+void FlipFilter::prepareQuery() {
+    sketch->prepareQuery();
 }
 
 
@@ -87,15 +166,11 @@ uint32_t FlipFilter::query(uint32_t label) {
             uint32_t key_hash_val;
             MurmurHash3_x86_32(&label, sizeof(label), hash_seeds[i], &key_hash_val);
             uint32_t b_idx = key_hash_val % num_bitmaps_[l];
-            bool op_ = getOp(label, b_idx); // true : 1
-            uint32_t same_direction_count = 0;
-            for (bool bit: filter_[l][b_idx].bitmap) {
-                if (bit == op_) {
-                    same_direction_count++;
-                }
-            }
+            bool op_ = getOp(label, b_idx);
+
+            uint32_t same_direction_count = filter_[l][b_idx].sameDirectionCount(op_);
             spread_es += same_direction_count;
-            if (same_direction_count > ratio_threshold_ * bitmap_sizes_[l]) {
+            if (same_direction_count >= pass_count_thresholds_[l]) {
                 valid_b ++;
             }
         }
@@ -108,115 +183,19 @@ uint32_t FlipFilter::query(uint32_t label) {
 
 
 
-void FlipFilter::spreadEstimation(
-        std::vector<std::pair<uint32_t, uint32_t>>& dataset,
-        const std::unordered_map<uint32_t, std::unordered_set<uint32_t>>& true_cardi) {
-
-    for (const auto& [key, element] : dataset) {
-        update(key, element);
-    }
-    float total_are = 0.0f;
-    uint32_t count = 0;
-    for (const auto& entry : true_cardi) {
-        uint32_t flow_label = entry.first;
-        uint32_t true_value = entry.second.size();
-        uint32_t estimated_value = query(flow_label);
-        if (true_value > 0) {
-            float are = std::abs(static_cast<float>(estimated_value) - static_cast<float>(true_value)) / static_cast<float>(true_value);
-            total_are += are;
-            ++count;
-        }
-    }
-    if (count > 0) {
-        float avg_are = total_are / count;
-        std::cout << "ARE: " << avg_are << std::endl;
-    }else {
-        std::cout << "No data to calculate ARE." << std::endl;
-    }
-}
-
-
 
 
 std::unordered_map<uint32_t, uint32_t> FlipFilter::detect(uint32_t threshold) {
     std::unordered_map<uint32_t, uint32_t> result;
     std::unordered_map<uint32_t, uint32_t> detected_ss;
-    // get super spreader candidates
     detected_ss = sketch->candidates();
     for (const auto& [key, estimated] : detected_ss) {
         uint32_t es = estimated + que(key);
-        if ( es > threshold) {
+        if (es > threshold) {
             result[key] = es;
         }
     }
     return result;
-}
-
-
-
-void FlipFilter::SSDetection(
-        const std::vector<std::pair<uint32_t, uint32_t>>& dataset,
-        const std::unordered_map<uint32_t, std::unordered_set<uint32_t>>& true_cardi,
-        const std::vector<uint32_t> thresholds) {
-
-    // the process of traffic
-    for (const auto& [key, element] : dataset) {
-        update(key, element);
-    }
-
-    std::cout << "\nSuper Spreader Detection:\n";
-    for (uint32_t threshold : thresholds) {
-        std::unordered_map<uint32_t, uint32_t> ground_truth;
-        for (const auto& [key, elements] : true_cardi) {
-            if (elements.size() > threshold) {
-                ground_truth[key] = elements.size();
-            }
-        }
-        std::unordered_map<uint32_t, uint32_t> detected_ss;
-        detected_ss = detect(threshold);
-        int TP = 0;
-        for (const auto& [key, estimated] : detected_ss) {
-            if (ground_truth.find(key) != ground_truth.end()) {
-                TP++;
-            }
-        }
-        double precision = (detected_ss.size() > 0) ? (double)TP / detected_ss.size() : 0.0;
-        double recall = (ground_truth.size() > 0) ? (double)TP / ground_truth.size() : 0.0;
-        double f1_score = (precision + recall > 0) ? 2 * precision * recall / (precision + recall) : 0.0;
-        std::cout << "Th: " << threshold << ", F1: " << f1_score << std::endl;
-    }
-}
-
-
-
-
-
-
-void FlipFilter::throughput(const std::vector<std::pair<uint32_t, uint32_t>>& dataset,
-                            const std::unordered_map<uint32_t, std::unordered_set<uint32_t>>& true_cardi){
-
-    // time for starting update
-    auto start_update = std::chrono::high_resolution_clock::now();
-    // the process of traffic
-    for (const auto& [key, element] : dataset) {
-        update(key, element);
-    }
-    // time for end
-    auto end_update = std::chrono::high_resolution_clock::now();
-    std::chrono::duration<double> update_duration = end_update - start_update;
-    double update_throughput_Mpps = (dataset.size() / 1e6) / update_duration.count();
-
-    // time for starting query
-    auto start_query = std::chrono::high_resolution_clock::now();
-    for (const auto& [flow_label, ele_set] : true_cardi) {
-        query(flow_label);
-    }
-    auto end_query = std::chrono::high_resolution_clock::now();
-    std::chrono::duration<double> query_duration = end_query - start_query;
-    double query_throughput_Mfps = (true_cardi.size() / 1e6) / query_duration.count();
-
-    std::cout << "update Throughput: " << update_throughput_Mpps << " Mips" << std::endl;
-    std::cout << "Query Throughput: " << query_throughput_Mfps << " Mfps" << std::endl;
 }
 
 
@@ -231,18 +210,15 @@ uint32_t FlipFilter::que(uint32_t label) {
             uint32_t key_hash_val;
             MurmurHash3_x86_32(&label, sizeof(label), hash_seeds[i], &key_hash_val);
             uint32_t b_idx = key_hash_val % num_bitmaps_[l];
-            bool op_ = getOp(label, b_idx); // true : 1
-            uint32_t same_direction_count = 0;
-            for (bool bit: filter_[l][b_idx].bitmap) {
-                if (bit == op_) {
-                    same_direction_count++;
-                }
-            }
+            bool op_ = getOp(label, b_idx);
+
+            uint32_t same_direction_count = filter_[l][b_idx].sameDirectionCount(op_);
             spread_es += same_direction_count;
-            if (same_direction_count > ratio_threshold_ * bitmap_sizes_[l]) {
+            if (same_direction_count >= pass_count_thresholds_[l]) {
                 valid_b ++;
             }
         }
+
         if (valid_b * 2 <= distribute_num )
             return spread_es;
     }
@@ -250,9 +226,7 @@ uint32_t FlipFilter::que(uint32_t label) {
 }
 
 
-
 std::unordered_map<uint32_t, uint32_t> FlipFilter::candidates( ) {
-    // just an empty implementation, not used for filter, only implemented in sketch for giving super spreader candidates
     std::unordered_map<uint32_t, uint32_t> result;
     return result;
 }

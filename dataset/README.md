@@ -1,34 +1,35 @@
-# About the Datasets
+﻿# About the Datasets
 
-We conduct our experiments using three real-world datasets. For each dataset, we provide a small demo to help you quickly test and verify your implementation. Full datasets can be downloaded from the respective official sources.
+This repository provides small demo traces for quick testing. The full datasets are not redistributed here and can be obtained from their official sources.
 
----
+## CAIDA
 
-## CAIDA Anonymized Internet Traces (2019)
+Description: This dataset contains IP-level traffic traces collected by CAIDA in 2019. Each packet is identified by its source and destination IP addresses.
 
-- **Description**: This dataset contains IP-level traffic traces collected by CAIDA in 2019. Each packet is identified by its source and destination IP addresses.
-- **Sample File**: A small demo trace is included in this repository.
-- **Full Dataset**: Available upon request from the official CAIDA website:  
-  https://catalog.caida.org/dataset/passive_2019_pcap
+Sample File: A small demo trace is included in this repository. The demo file contains source and destination IP addresses:
 
----
+```text
+src_ip dst_ip
+```
 
-## MAWI Traffic Traces
+Full Dataset: Available upon request from the official CAIDA website:
 
-- **Description**: The MAWI dataset is maintained by [the MAWI Working Group](http://www.wide.ad.jp/project/wg/mawi.html) of [the WIDE Project](http://www.wide.ad.jp/) and consists of daily traces at the transit link of WIDE to the upstream ISP. 
-- **Use Case**: Commonly used for tasks like super spreader detection and traffic anomaly analysis.
-- **Sample File**: A small demo file is provided for testing.
-- **Full Dataset**: Can be downloaded from the MAWI archive:  
-  https://mawi.wide.ad.jp/mawi/
+https://catalog.caida.org/dataset/passive_2019_pcap
 
----
+## StackOverflow
 
-## StackOverflow Logs
+Description: The StackOverflow demo trace is derived from Stack Exchange data. Each record in the demo file contains a content ID and a user ID.
 
-- **Description**: This dataset records content access events on StackOverflow. Each record contains a content ID and the user ID.
-- **Sample File**: A demo version of the dataset is included.
-- **Full Dataset**: Dataset Source: https://archive.org/download/stackexchange
+Sample File: A small demo trace is included in this repository. The demo file is formatted as:
 
----
+```text
+content_id user_id
+```
 
-> ⚠️ **Note**: The provided demo files are for research and testing purposes only. Do not use them for any commercial or other applications.
+Source Data: The original data dump is available from Internet Archive:
+
+https://archive.org/details/stackexchange
+
+Raw download directory:
+
+https://archive.org/download/stackexchange

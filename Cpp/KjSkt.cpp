@@ -1,8 +1,10 @@
 //
+// Created by Hanwen on 2025/3/6.
 // An implementation for paper From CountMin to Super kJoin Sketches for Flow Spread Estimation
 // available at https://doi.org/10.1109/TNSE.2023.3279665
 //
 #include "header/KjSkt.h"
+
 #include <set>
 #include <fstream>
 #include <string.h>
@@ -27,15 +29,18 @@ KjSkt::KjSkt(uint32_t memory_kb) {
     } else {
         alpha = (0.7213 / (1 + (1.079 / l)));
     }
-    srand(NULL);
+    srand(0);
     eleseed = uint32_t(rand());
     std::set<uint32_t> mset;
     while (mset.size() != this->d)
         mset.insert(uint32_t(rand()));
+
     int temp_i = 0;
     for (auto iter = mset.begin(); iter != mset.end(); iter++) {
         keyseeds[temp_i++] = *iter;
     }
+
+
 }
 
 void KjSkt::update(uint32_t key, uint32_t ele) {
@@ -95,35 +100,6 @@ uint32_t KjSkt::query(uint32_t key) {
     return flow_cardi;
 }
 
-
-
-
-void KjSkt::spreadEstimation(
-        const std::vector<std::pair<uint32_t, uint32_t>>& dataset,
-        const std::unordered_map<uint32_t, std::unordered_set<uint32_t>>& true_cardi) {
-    for (const auto& [key, element] : dataset) {
-        update(key, element);
-    }
-    float total_are = 0.0f;
-    uint32_t count = 0;
-    for (const auto& entry : true_cardi) {
-        uint32_t flow_label = entry.first;
-        uint32_t true_value = entry.second.size();
-        uint32_t estimated_value = query(flow_label);
-        if (true_value > 0) {
-            float are = std::abs(static_cast<float>(estimated_value) - static_cast<float>(true_value)) / static_cast<float>(true_value);
-            total_are += are;
-            ++count;
-        }
-    }
-
-    if (count > 0) {
-        float avg_are = total_are / count;
-        std::cout << "ARE: " << avg_are << std::endl;
-    } else {
-        std::cout << "No data to calculate ARE." << std::endl;
-    }
-}
 
 
 

@@ -1,6 +1,7 @@
 #include "header/FreeRS.h"
 
 FreeRS::FreeRS(uint32_t memorySize) : ss(memorySize * 0.85) {
+    srand(1);
     uint32_t totalMemBits = memorySize * 1024 * 8;
     uint32_t ssMemBits = totalMemBits * 0.85;
     uint32_t regMemBits = totalMemBits - ssMemBits;
@@ -82,12 +83,14 @@ std::unordered_map<uint32_t, uint32_t> FreeRS::detect(uint32_t threshold) {
     std::unordered_map<uint32_t, uint32_t> result;
     unordered_map<uint32_t, uint32_t> estFlowSpreads;
     getEstimatedFlowSpreads(estFlowSpreads);
+
     for (auto iter = estFlowSpreads.begin(); iter != estFlowSpreads.end(); iter++) {
         uint32_t estimate = iter->second;
         if (estimate > threshold) {
             result[iter->first] = estimate;
         }
     }
+
     return result;
 }
 
@@ -95,46 +98,18 @@ std::unordered_map<uint32_t, uint32_t> FreeRS::detect(uint32_t threshold) {
 
 std::unordered_map<uint32_t, uint32_t> FreeRS::candidates() {
     std::unordered_map<uint32_t, uint32_t> result;
+
     unordered_map<uint32_t, uint32_t> estFlowSpreads;
     getEstimatedFlowSpreads(estFlowSpreads);
+
     for (auto iter = estFlowSpreads.begin(); iter != estFlowSpreads.end(); iter++) {
         result[iter->first] = iter->second;
     }
+
     return result;
 }
 
 
-
-void FreeRS::SSDetection(
-        const std::vector<std::pair<uint32_t, uint32_t>> &dataset,
-        const std::unordered_map<uint32_t, std::unordered_set<uint32_t>> &true_cardi,
-        const std::vector<uint32_t> thresholds) {
-    // the process of traffic
-    for (const auto &[key, element]: dataset) {
-        update(key, element);
-    }
-    std::cout << "\nSuper Spreader Detection:\n";
-    for (uint32_t threshold: thresholds) {
-        std::unordered_map<uint32_t, uint32_t> ground_truth;
-        for (const auto &[key, elements]: true_cardi) {
-            if (elements.size() > threshold) {
-                ground_truth[key] = elements.size();
-            }
-        }
-        std::unordered_map<uint32_t, uint32_t> detected_ss;
-        detected_ss = detect(threshold);
-        int TP = 0;
-        for (const auto &[key, estimated]: detected_ss) {
-            if (ground_truth.find(key) != ground_truth.end()) {
-                TP++;
-            }
-        }
-        double precision = (detected_ss.size() > 0) ? (double) TP / detected_ss.size() : 0.0;
-        double recall = (ground_truth.size() > 0) ? (double) TP / ground_truth.size() : 0.0;
-        double f1_score = (precision + recall > 0) ? 2 * precision * recall / (precision + recall) : 0.0;
-        std::cout << "Th: " << threshold << ", F1: " << f1_score << std::endl;
-    }
-}
 
 FreeRS::~FreeRS() {
     delete[]regArray;
@@ -144,6 +119,7 @@ FreeRS::~FreeRS() {
 uint32_t FreeRS::query(const uint32_t key){
     unordered_map<uint32_t, uint32_t> estFlowSpreads;
     getEstimatedFlowSpreads(estFlowSpreads);
+
     auto it = estFlowSpreads.find(key);
     if (it != estFlowSpreads.end()) {
         return it->second;

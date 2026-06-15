@@ -4,6 +4,7 @@
 #define LOGLOGFILTER_SPREAD_H
 
 
+#include "BaseSketchType.h"
 #include "MurmurHash3.h"
 #include "Sketch.h"
 
@@ -18,10 +19,16 @@ private:
     std::vector<int8_t> R;
     std::vector<int> seeds;
     std::unordered_set<uint64_t> seen_pairs;
-
+    std::unordered_set<uint32_t> passed_;
 
 public:
-    LogLogFilter_Spread(float memory_kb, Sketch* skt);
+    LogLogFilter_Spread(float memory_kb, float f_ratio, BaseSketchType base_sketch_type = BaseSketchType::FreeRS);
+
+    ~LogLogFilter_Spread() override {
+        delete sketch;
+    }
+
+    void setPerFlowMode(bool enabled);
 
     int get_leftmost(uint32_t random_val);
 
@@ -29,20 +36,7 @@ public:
 
     uint32_t query(const uint32_t key);
 
-    void spreadEstimation(
-            const std::vector<std::pair<uint32_t, uint32_t>>& dataset,
-            const std::unordered_map<uint32_t, std::unordered_set<uint32_t>>& true_cardi);
-
-
-    void SSDetection(
-            const std::vector<std::pair<uint32_t, uint32_t>>& dataset,
-            const std::unordered_map<uint32_t, std::unordered_set<uint32_t>>& true_cardi,
-            const std::vector<uint32_t> thresholds);
-
     std::unordered_map<uint32_t, uint32_t> detect(uint32_t threshold);
-
-    void throughput(const std::vector<std::pair<uint32_t, uint32_t>>& dataset,
-                    const std::unordered_map<uint32_t, std::unordered_set<uint32_t>>& true_cardi);
 
     uint32_t que(const uint32_t key);
     std::unordered_map<uint32_t, uint32_t> candidates();

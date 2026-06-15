@@ -7,6 +7,7 @@
 
 
 //
+// Created by Hanwen on 2025/3/8.
 // An implementation for paper From CountMin to Super kJoin Sketches for Flow Spread Estimation
 // available at https://doi.org/10.1109/TNSE.2023.3279665
 // Super kJoin version
@@ -44,9 +45,6 @@ public:
 
     void update(uint32_t, uint32_t);
     uint32_t query(uint32_t);
-    void spreadEstimation(
-            const std::vector<std::pair<uint32_t, uint32_t>>& dataset,
-            const std::unordered_map<uint32_t, std::unordered_set<uint32_t>>& true_cardi);
 
     std::unordered_map<uint32_t, uint32_t> detect(uint32_t threshold);
     std::unordered_map<uint32_t, uint32_t> candidates();

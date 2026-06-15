@@ -6,9 +6,9 @@
 #include <ctime>
 #include <cmath>
 #include <cstring>
-// #include "./MurmurHash3.h"
 #include "./Xorshift.h"
 #include "Sketch.h"
+#include "BaseSketchType.h"
 
 #define MAX_VALUE 0xFFFFFFFF
 #define NUM_BITS 8 // size of each item
@@ -38,40 +38,28 @@ private:
     uint8_t *bitmap;
     Sketch *sketch;
     xorshift::xorshift32 rng;
-
     uint32_t get_unit_index(uint32_t flow_id);
     int get_coupon_index(uint32_t flow_id, uint32_t ele_id);
+    std::unordered_set<uint32_t> passed_;
 
 public:
 
-    CouponFilter(uint32_t memory_kb, Sketch *skt);
+    CouponFilter(uint32_t memory_kb, float f_ratio, BaseSketchType base_sketch_type = BaseSketchType::FreeRS);
 
-    ~CouponFilter() {
+    // CouponFilter(uint32_t c_, uint32_t tau_, double p_, uint32_t memory_kb, Sketch* skt); // test param
+
+    ~CouponFilter() override {
         if (bitmap) {
             delete[] bitmap;
             bitmap = nullptr;
         }
+        delete sketch;
     }
 
     void update(uint32_t flow_id, uint32_t ele_id);
     uint32_t query(uint32_t flow_id);
 
-    void spreadEstimation(
-            const std::vector<std::pair<uint32_t, uint32_t>>& dataset,
-            const std::unordered_map<uint32_t, std::unordered_set<uint32_t>>& true_cardi);
-
-
-    // for super spreader detection
     std::unordered_map<uint32_t, uint32_t> detect(uint32_t threshold);
-
-    void SSDetection(
-            const std::vector<std::pair<uint32_t, uint32_t>>& dataset,
-            const std::unordered_map<uint32_t, std::unordered_set<uint32_t>>& true_cardi,
-            const std::vector<uint32_t> thresholds);
-
-    void throughput(const std::vector<std::pair<uint32_t, uint32_t>>& dataset,
-                    const std::unordered_map<uint32_t, std::unordered_set<uint32_t>>& true_cardi);
-
     std::unordered_map<uint32_t, uint32_t> candidates();
 
 };

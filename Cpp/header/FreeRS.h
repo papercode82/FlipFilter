@@ -47,6 +47,7 @@ private:
 
 public:
     StreamSummary(uint32_t memorySize) {
+        // ???????????????????????288 bits
         SS_MAX_SIZE = memorySize * 1024 * 8 / 288;
     }
 
@@ -171,11 +172,14 @@ public:
         SSValueNode *newValueNode = nullptr;
         SSValueNode *lastValueNode = nullptr;
         SSValueNode *curValueNode = nullptr;
+
+        // ????ssKeyNode ??ssKeyNode->parent ??????
         if (ssKeyNode == nullptr || ssKeyNode->parent == nullptr) {
             std::cerr << "Error: Invalid SSKeyNode or SSKeyNode->parent" << std::endl;
             return;
         }
 
+        // ??? value ??????????key ???
         if (ssKeyNode->next == ssKeyNode) {
             newValueNode = ssKeyNode->parent;
             lastValueNode = newValueNode->pre;
@@ -188,13 +192,14 @@ public:
                 curValueNode->pre = lastValueNode;
             }
             if (firstValueNode == newValueNode) {
-                firstValueNode = newValueNode->next;
+                firstValueNode = newValueNode->next;  // ?????nullptr
                 if (firstValueNode != nullptr) {
                     firstValueNode->pre = nullptr;
                 }
             }
         }
         else {
+            // ??????????????key ???
             lastValueNode = ssKeyNode->parent;
             curValueNode = lastValueNode->next;
 
@@ -202,6 +207,7 @@ public:
             uint32_t key = ssKeyNode->key;
             uint32_t err = ssKeyNode->err;
 
+            // ??? ssKeyNode ??nextKeyNode ???????
             ssKeyNode->key = nextKeyNode->key;
             nextKeyNode->key = key;
             ssKeyNode->err = nextKeyNode->err;
@@ -218,11 +224,13 @@ public:
             ssKeyNode = nextKeyNode;
         }
 
+        // ???????????? newValue ??? value ???
         while (curValueNode != nullptr && curValueNode->counter < newValue) {
             lastValueNode = curValueNode;
             curValueNode = curValueNode->next;
         }
 
+        // ?????????????????????????value ???
         if (curValueNode == nullptr || curValueNode->counter > newValue) {
             if (newValueNode == nullptr) {
                 newValueNode = (SSValueNode *) calloc(1, sizeof(SSValueNode));
@@ -232,7 +240,7 @@ public:
                 }
                 newValueNode->firstKeyNode = ssKeyNode;
                 ssKeyNode->parent = newValueNode;
-                ssKeyNode->next = ssKeyNode;
+                ssKeyNode->next = ssKeyNode;  // ?????????????
             }
 
             newValueNode->counter = newValue;
@@ -243,24 +251,113 @@ public:
                 curValueNode->pre = newValueNode;
             }
 
-            if (lastValueNode == nullptr) {
+            if (lastValueNode == nullptr) {  // ??? lastValueNode ??nullptr?????newValueNode ?????????????
                 firstValueNode = newValueNode;
             } else {
                 lastValueNode->next = newValueNode;
             }
         } else {  // newValue == curValueNode->counter
+            // ????????????????????????
             ssKeyNode->parent = curValueNode;
             ssKeyNode->next = curValueNode->firstKeyNode->next;
             curValueNode->firstKeyNode->next = ssKeyNode;
 
             if (newValueNode != nullptr) {
-                free(newValueNode);
+                free(newValueNode);  // ????????? newValueNode
             }
         }
     }
 
 
 
+
+
+
+    //newVal must be larger than the old val
+//    void SSUpdate(SSKeyNode *ssKeyNode, uint32_t newValue) {
+//
+//        SSValueNode *newValueNode= nullptr;
+//        SSValueNode *lastValueNode= nullptr;
+//        SSValueNode *curValueNode= nullptr;
+//
+//        if (ssKeyNode->next == ssKeyNode) {//the value node only has one key node
+//            newValueNode=ssKeyNode->parent;
+//            lastValueNode=newValueNode->pre;
+//            curValueNode=newValueNode->next;
+//
+//            if(lastValueNode!= nullptr){
+//                lastValueNode->next=curValueNode;
+//            }
+//            if(curValueNode!= nullptr){
+//                curValueNode->pre=lastValueNode;
+//            }
+//            if(firstValueNode==newValueNode){
+//                firstValueNode=newValueNode->next;//may be nullptr
+//                firstValueNode->pre= nullptr;
+//            }
+//        }
+//        else{
+//            lastValueNode=ssKeyNode->parent;
+//            curValueNode=lastValueNode->next;
+//            //detach the key node from old value node
+//            //Since the linked list is single linked, we have to traverse the list to find the pre node.
+//            //We choose to replace the node content instead of finding the pre node.
+//            SSKeyNode* nextKeyNode=ssKeyNode->next;
+//            uint32_t key=ssKeyNode->key;
+//            uint32_t err=ssKeyNode->err;
+//            ssKeyNode->key=nextKeyNode->key;
+//            nextKeyNode->key=key;
+//            ssKeyNode->err=nextKeyNode->err;
+//            nextKeyNode->err=err;
+//
+//            hashTable[ssKeyNode->key]=ssKeyNode;
+//            hashTable[nextKeyNode->key]=nextKeyNode;
+//
+//            ssKeyNode->next=nextKeyNode->next;
+//            if(nextKeyNode==lastValueNode->firstKeyNode){
+//                lastValueNode->firstKeyNode=ssKeyNode;
+//            }
+//            ssKeyNode=nextKeyNode;
+//        }
+//
+//        while(curValueNode!= nullptr and curValueNode->counter<newValue){//find the first value node larger than newValue
+//            lastValueNode=curValueNode;
+//            curValueNode=curValueNode->next;
+//        }
+//
+//        if(curValueNode== nullptr or curValueNode->counter>newValue)//need to create a new value Node between lastValueNode and curValueNode
+//        {
+//            if(newValueNode== nullptr){
+//                newValueNode = (SSValueNode *) calloc(1, sizeof(SSValueNode));
+//                newValueNode->firstKeyNode = ssKeyNode;
+//                ssKeyNode->parent = newValueNode;
+//                ssKeyNode->next = ssKeyNode;
+//            }
+//
+//            newValueNode->counter = newValue;
+//            newValueNode->pre = lastValueNode;
+//            newValueNode->next=curValueNode;
+//
+//            if(curValueNode!= nullptr){
+//                curValueNode->pre=newValueNode;
+//            }
+//
+//            if(lastValueNode== nullptr){//means newValueNode should be the firstValueNode
+//                firstValueNode = newValueNode;
+//            }else{
+//                lastValueNode->next=newValueNode;
+//            }
+//
+//        }else{//newValue==curValueNode->counter
+//            ssKeyNode->parent = curValueNode;
+//            ssKeyNode->next = curValueNode->firstKeyNode->next;
+//            curValueNode->firstKeyNode->next = ssKeyNode;
+//
+//            if(newValueNode!= nullptr){
+//                free(newValueNode);
+//            }
+//        }
+//    }
     void getKeyVals(unordered_map<uint32_t,uint32_t>& keyVals) const{
         for(auto iter=hashTable.begin();iter!=hashTable.end();iter++){
             uint32_t key=iter->first;
@@ -305,11 +402,6 @@ public:
 
     void getEstimatedFlowSpreads(std::unordered_map<uint32_t, uint32_t>& estimatedFlowSpreads) const;
     std::unordered_map<uint32_t, uint32_t> detect(uint32_t threshold);
-    void SSDetection(
-        const std::vector<std::pair<uint32_t, uint32_t>>& dataset,
-        const std::unordered_map<uint32_t, std::unordered_set<uint32_t>>& true_cardi,
-        const std::vector<uint32_t> thresholds
-    );
 
     std::unordered_map<uint32_t, uint32_t> candidates();
 
@@ -317,3 +409,4 @@ public:
 
 
 #endif
+

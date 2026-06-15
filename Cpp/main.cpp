@@ -1,293 +1,699 @@
-
 #include "header/FlipFilter.h"
 #include "header/Couper.h"
 #include "header/CouponFilter.h"
 #include "header/LogLogFilter_Spread.h"
-#include "header/SuperKjSkt.h"
-#include "header/KjSkt.h"
 #include "header/vHLL.h"
+#include "header/KjSkt.h"
+#include "header/SuperKjSkt.h"
 #include "header/rSkt.h"
 #include "header/FreeRS.h"
-#include "header/HLLSampler.h"
-#include <iostream>
-#include <vector>
-#include <fstream>
-#include <sstream>
+
+#include <algorithm>
 #include <chrono>
+#include <cmath>
+#include <cstdint>
+#include <filesystem>
+#include <fstream>
+#include <iomanip>
+#include <iostream>
+#include <memory>
+#include <optional>
+#include <sstream>
+#include <stdexcept>
+#include <string>
 #include <unordered_map>
 #include <unordered_set>
-#include <string>
 #include <utility>
-#include <iomanip>
-#include <map>
-#include <set>
-#include <cstdint>
+#include <vector>
 
+using Dataset = std::vector<std::pair<uint32_t, uint32_t>>;
+using TrueCardinality = std::unordered_map<uint32_t, std::unordered_set<uint32_t>>;
 
-#ifdef _WIN32
-//#include <winsock2.h>
-#include <optional>
+enum class DatasetChoice {
+    CAIDA,
+    StackOverflow
+};
 
-#pragma comment(lib, "ws2_32.lib")
-#else
-#include <arpa/inet.h>
-#endif
+enum class Method {
+    FlipFilter,
+    Couper,
+    CouponFilter,
+    LogLogFilterSpread,
+    SketchOnly
+};
 
+struct PerFlowResult {
+    Method method;
+    BaseSketchType base_sketch;
+    uint32_t memory_kb;
+    float filter_ratio;
+    double are = 0.0;
+    double update_mpps = 0.0;
+    double query_mfps = 0.0;
+};
 
-// load dataset and get true per-flow spread,
-// auto [dataset, true_cardinality] = loadDataSet();
-// first is dataset, second is related spread statistics
-std::pair<std::vector<std::pair<uint32_t, uint32_t>>,
-        std::unordered_map<uint32_t, std::unordered_set<uint32_t>>> loadDataSetCAIDA() {
-    std::vector<std::string> file_paths = {
-            "file path for your dataset"
+struct SSResult {
+    Method method;
+    BaseSketchType base_sketch;
+    uint32_t memory_kb;
+    float filter_ratio;
+    uint32_t threshold;
+    double f1 = 0.0;
+    double are = 0.0;
+};
+
+const DatasetChoice DATASET_CHOICE = DatasetChoice::CAIDA;
+const std::vector<uint32_t> MEMORY_VALUES = {100, 200, 300, 400};
+const std::vector<float> FILTER_RATIOS = {0.20f};
+const bool RUN_PERFLOW_EXPERIMENT = true;
+const bool RUN_SS_EXPERIMENT = true;
+const bool RUN_SKETCH_ONLY_BASELINE = true;
+
+const std::vector<BaseSketchType> PERFLOW_BASE_SKETCHES = {
+        BaseSketchType::VHLL,
+        BaseSketchType::KjSkt,
+        BaseSketchType::SuperKjSkt,
+        BaseSketchType::RSkt
+};
+
+const std::vector<BaseSketchType> SS_BASE_SKETCHES = {
+        BaseSketchType::FreeRS
+};
+
+const std::vector<Method> METHODS = {
+        Method::FlipFilter,
+        Method::Couper,
+        Method::CouponFilter,
+        Method::LogLogFilterSpread
+};
+
+const int FLIP_LAYERS = 2;
+const std::vector<int> FLIP_BITMAP_SIZES = {4, 8};
+const float FLIP_RATIO_THRESHOLD = 0.70f;
+const std::vector<float> FLIP_LAYER_MEMORY_RATIOS = {0.50f, 0.50f};
+const uint32_t FLIP_DISTRIBUTE_NUM = 3;
+const std::vector<uint32_t> SS_THRESHOLDS = {1000};
+
+std::string datasetName(DatasetChoice choice) {
+    switch (choice) {
+        case DatasetChoice::CAIDA:
+            return "CAIDA";
+        case DatasetChoice::StackOverflow:
+            return "StackOverflow";
+    }
+    return "Unknown";
+}
+
+std::string methodName(Method method) {
+    switch (method) {
+        case Method::FlipFilter:
+            return "FlipFilter";
+        case Method::Couper:
+            return "Couper";
+        case Method::CouponFilter:
+            return "CouponFilter";
+        case Method::LogLogFilterSpread:
+            return "LogLogFilter_Spread";
+        case Method::SketchOnly:
+            return "SketchOnly";
+    }
+    return "Unknown";
+}
+
+std::string sketchName(BaseSketchType sketch) {
+    switch (sketch) {
+        case BaseSketchType::VHLL:
+            return "vHLL";
+        case BaseSketchType::KjSkt:
+            return "KjSkt";
+        case BaseSketchType::SuperKjSkt:
+            return "SuperKjSkt";
+        case BaseSketchType::RSkt:
+            return "rSkt";
+        case BaseSketchType::FreeRS:
+            return "FreeRS";
+    }
+    return "Unknown";
+}
+
+std::string formatFloat(float value, int precision = 2) {
+    std::ostringstream oss;
+    oss << std::fixed << std::setprecision(precision) << value;
+    return oss.str();
+}
+
+std::string formatIntVector(const std::vector<int>& values) {
+    std::ostringstream oss;
+    oss << "{";
+    for (size_t i = 0; i < values.size(); ++i) {
+        if (i > 0) oss << ":";
+        oss << values[i];
+    }
+    oss << "}";
+    return oss.str();
+}
+
+std::string formatFloatVector(const std::vector<float>& values) {
+    std::ostringstream oss;
+    oss << "{";
+    for (size_t i = 0; i < values.size(); ++i) {
+        if (i > 0) oss << ":";
+        oss << formatFloat(values[i]);
+    }
+    oss << "}";
+    return oss.str();
+}
+
+std::filesystem::path resolveResultPath(const std::string& file_name) {
+    std::filesystem::path result_dir = "results";
+    std::filesystem::create_directories(result_dir);
+    return result_dir / file_name;
+}
+
+std::string resolveDatasetPath(const std::string& file_name) {
+    const std::vector<std::filesystem::path> candidates = {
+            std::filesystem::path("../dataset") / file_name,
+            std::filesystem::path("../../dataset") / file_name,
+            std::filesystem::path("dataset") / file_name
     };
 
-    std::vector<std::pair<uint32_t, uint32_t>> data;
-    std::unordered_map<uint32_t, std::unordered_set<uint32_t>> true_cardinality;
-    uint64_t total_data_num = 0;
+    for (const auto& path: candidates) {
+        if (std::filesystem::exists(path)) {
+            return path.string();
+        }
+    }
 
-    for (const auto &file_path: file_paths) {
+    return candidates.front().string();
+}
+
+std::optional<uint32_t> parseIPv4(const std::string& ip_str) {
+    std::stringstream ss(ip_str);
+    uint32_t result = 0;
+    int part = 0;
+
+    for (int i = 0; i < 4; ++i) {
+        if (!(ss >> part)) return std::nullopt;
+        if (part < 0 || part > 255) return std::nullopt;
+        result = (result << 8) | static_cast<uint32_t>(part);
+        if (i < 3) {
+            if (ss.peek() != '.') return std::nullopt;
+            ss.ignore();
+        }
+    }
+
+    if (ss.rdbuf()->in_avail() != 0) return std::nullopt;
+    return result;
+}
+
+std::pair<Dataset, TrueCardinality> loadDataSetCAIDA() {
+    std::vector<std::string> file_paths = {
+            resolveDatasetPath("CAIDA_demo.txt")
+    };
+
+    Dataset data;
+    TrueCardinality true_cardinality;
+
+    for (const auto& file_path: file_paths) {
         std::ifstream file(file_path);
         if (!file.is_open()) {
-            std::cerr << "Failed to open file: " << file_path << std::endl;
-            continue;
+            throw std::runtime_error("Failed to open file: " + file_path);
         }
 
         std::string line;
-        while (getline(file, line)) {
+        while (std::getline(file, line)) {
             std::istringstream iss(line);
-            std::string source_ip, dest_ip;
+            std::string source_ip;
+            std::string dest_ip;
             iss >> source_ip >> dest_ip;
             if (source_ip.empty() || dest_ip.empty()) continue;
 
-            uint32_t src_ip_int = 0, dst_ip_int = 0;
-            int part = 0;
-            char dot;
-            std::istringstream ss1(source_ip), ss2(dest_ip);
-            bool valid = true;
+            auto src = parseIPv4(source_ip);
+            auto dst = parseIPv4(dest_ip);
+            if (!src || !dst) continue;
 
-            for (int i = 0; i < 4; i++) {
-                if (!(ss1 >> part)) {
-                    valid = false;
-                    break;
-                }
-                if (part < 0 || part > 255) {
-                    valid = false;
-                    break;
-                }
-                src_ip_int = (src_ip_int << 8) | part;
-                if (i < 3 && !(ss1 >> dot && dot == '.')) {
-                    valid = false;
-                    break;
-                }
-            }
-            if (ss1 >> dot) valid = false;
-
-            for (int i = 0; i < 4 && valid; i++) {
-                if (!(ss2 >> part)) {
-                    valid = false;
-                    break;
-                }
-                if (part < 0 || part > 255) {
-                    valid = false;
-                    break;
-                }
-                dst_ip_int = (dst_ip_int << 8) | part;
-                if (i < 3 && !(ss2 >> dot && dot == '.')) {
-                    valid = false;
-                    break;
-                }
-            }
-            if (ss2 >> dot) valid = false;
-
-            if (!valid) continue;
-
-            data.emplace_back(src_ip_int, dst_ip_int);
-            true_cardinality[src_ip_int].insert(dst_ip_int);
-            total_data_num++;
+            data.emplace_back(*src, *dst);
+            true_cardinality[*src].insert(*dst);
         }
-
-        std::cout << file_path << " is loaded." << std::endl;
     }
 
-    std::cout << "\n" << file_paths.size() << " data file loaded.\n"
-              << "Totaling packets: " << total_data_num
-              << ", Unique flows: " << true_cardinality.size() << std::endl;
     return {data, true_cardinality};
 }
 
-
-std::pair<
-        std::vector<std::pair<uint32_t, uint32_t>>,
-        std::unordered_map<uint32_t, std::unordered_set<uint32_t>>
-> loadDataSetMAWI() {
+std::pair<Dataset, TrueCardinality> loadDataSetStackOverflow() {
     std::vector<std::string> file_paths = {
-            "file path for your dataset"
-    };
-    std::vector<std::pair<uint32_t, uint32_t>> data;
-    std::unordered_map<uint32_t, std::unordered_set<uint32_t>> true_cardinality;
-    uint64_t total_data_num = 0;
-    auto parse_ip = [](const std::string &ip_str) -> std::optional<uint32_t> {
-        std::stringstream ss(ip_str);
-        uint32_t result = 0;
-        int part;
-        for (int i = 0; i < 4; ++i) {
-            if (!(ss >> part)) return std::nullopt;
-            if (part < 0 || part > 255) return std::nullopt;
-            result = (result << 8) | part;
-            if (i < 3) {
-                if (ss.peek() != '.') return std::nullopt;
-                ss.ignore();
-            }
-        }
-        if (ss.rdbuf()->in_avail() != 0) return std::nullopt;
-        return result;
+            resolveDatasetPath("StackOverflow_demo.txt")
     };
 
-    for (const auto &file_path: file_paths) {
+    Dataset data;
+    TrueCardinality true_cardinality;
+
+    for (const auto& file_path: file_paths) {
         std::ifstream file(file_path);
         if (!file.is_open()) {
-            std::cerr << "Failed to open file: " << file_path << std::endl;
-            continue;
-        }
-        std::string line;
-        if (!std::getline(file, line)) {
-            std::cerr << "Empty file: " << file_path << std::endl;
-            continue;
-        }
-        while (std::getline(file, line)) {
-            std::stringstream ss(line);
-            std::string src_ip_str, dst_ip_str;
-
-            if (!std::getline(ss, src_ip_str, ',')) continue;
-            if (!std::getline(ss, dst_ip_str, ',')) continue;
-            auto src_ip_opt = parse_ip(src_ip_str);
-            auto dst_ip_opt = parse_ip(dst_ip_str);
-            if (!src_ip_opt || !dst_ip_opt) continue;
-            uint32_t src_ip = src_ip_opt.value();
-            uint32_t dst_ip = dst_ip_opt.value();
-            data.emplace_back(src_ip, dst_ip);
-            true_cardinality[src_ip].insert(dst_ip);
-            total_data_num++;
+            throw std::runtime_error("Failed to open file: " + file_path);
         }
 
-        std::cout << "Loaded file: " << file_path << std::endl;
-    }
-
-    std::cout << "\nFinished loading all files." << std::endl;
-    std::cout << "Total packets: " << total_data_num << std::endl;
-    std::cout << "Unique flows: " << true_cardinality.size() << std::endl;
-    return {data, true_cardinality};
-}
-
-
-std::pair<std::vector<std::pair<uint32_t, uint32_t>>,
-        std::unordered_map<uint32_t, std::unordered_set<uint32_t>>> loadDataSetStackOverflow() {
-    std::vector<std::string> file_paths = {
-            "file path for dataset"
-    };
-    std::vector<std::pair<uint32_t, uint32_t>> data;
-    std::unordered_map<uint32_t, std::unordered_set<uint32_t>> true_cardinality;
-    uint64_t total_data_num = 0;
-    for (const auto &file_path: file_paths) {
-        std::ifstream file(file_path);
-        if (!file.is_open()) {
-            std::cerr << "Failed to open file: " << file_path << '\n';
-            continue;
-        }
         std::string line;
         while (std::getline(file, line)) {
             std::istringstream iss(line);
-            std::string key_str, ele_str;
+            std::string key_str;
+            std::string ele_str;
             if (!(iss >> key_str >> ele_str)) continue;
-            try {
-                uint32_t key_int = static_cast<uint32_t>(std::stoul(key_str));
-                uint32_t ele_int = static_cast<uint32_t>(std::stoul(ele_str));
-                data.emplace_back(key_int, ele_int);
-                true_cardinality[key_int].insert(ele_int);
-                ++total_data_num;
-            }
-            catch (const std::exception &e) {
-                std::cerr << "Parse error in file " << file_path
-                          << " line: \"" << line << "\" — " << e.what() << '\n';
-            }
+
+            uint32_t key = static_cast<uint32_t>(std::stoul(key_str));
+            uint32_t ele = static_cast<uint32_t>(std::stoul(ele_str));
+            data.emplace_back(key, ele);
+            true_cardinality[key].insert(ele);
         }
-        std::cout << file_path << " is loaded.\n";
     }
-    std::cout << "\n" << file_paths.size() << " files data loaded.\n"
-              << "Totaling: " << total_data_num
-              << ", Unique flows: " << true_cardinality.size() << std::endl;
+
     return {data, true_cardinality};
 }
 
+std::pair<Dataset, TrueCardinality> loadDataset(DatasetChoice choice) {
+    switch (choice) {
+        case DatasetChoice::CAIDA:
+            return loadDataSetCAIDA();
+        case DatasetChoice::StackOverflow:
+            return loadDataSetStackOverflow();
+    }
+    throw std::runtime_error("Unknown dataset choice.");
+}
 
-int main() {
+std::unique_ptr<Sketch> createSketchOnlyBaseSketch(uint32_t memory_kb, BaseSketchType base_sketch) {
+    switch (base_sketch) {
+        case BaseSketchType::VHLL:
+            return std::make_unique<vHLL>(memory_kb);
+        case BaseSketchType::KjSkt:
+            return std::make_unique<KjSkt>(memory_kb);
+        case BaseSketchType::SuperKjSkt:
+            return std::make_unique<SuperKjSkt>(memory_kb);
+        case BaseSketchType::RSkt:
+            return std::make_unique<rSkt>(memory_kb);
+        case BaseSketchType::FreeRS:
+            return std::make_unique<FreeRS>(memory_kb);
+    }
+    throw std::runtime_error("Unknown base sketch type.");
+}
 
-    std::cout << "Experiment starts ..." << std::endl;
-    auto start_time = std::chrono::steady_clock::now();
+void prepareQueryIfNeeded(Sketch& sketch) {
+    sketch.prepareQuery();
+}
 
-    auto [dataset, true_cardinality] = loadDataSetCAIDA();
-//    auto [dataset, true_cardinality] = loadDataSetMAWI();
-//    auto [dataset, true_cardinality] = loadDataSetStackOverflow();
+template<typename SketchType>
+PerFlowResult evaluatePerFlowSketch(
+        SketchType& sketch,
+        Method method,
+        BaseSketchType base_sketch,
+        uint32_t memory_kb,
+        float filter_ratio,
+        const Dataset& dataset,
+        const TrueCardinality& true_cardinality) {
+    auto start_update = std::chrono::high_resolution_clock::now();
+    for (const auto& [key, element]: dataset) {
+        sketch.update(key, element);
+    }
+    auto end_update = std::chrono::high_resolution_clock::now();
 
-    std::vector<uint32_t> memo_kb_values = {50, 100, 150, 200, 250, 300, 350, 400, 450, 500, 550};
-    std::vector<uint32_t> thresholds = {50, 100, 200, 400, 800, 1000, 1500, 2000};
+    prepareQueryIfNeeded(sketch);
 
-    for (uint32_t memo_kb: memo_kb_values) {
+    double total_are = 0.0;
+    uint32_t count = 0;
 
-        std::cout << "\nMemory (KB) = " << memo_kb << std::endl;
+    auto start_query = std::chrono::high_resolution_clock::now();
+    for (const auto& [flow_label, elements]: true_cardinality) {
+        const uint32_t true_value = static_cast<uint32_t>(elements.size());
+        const uint32_t estimated_value = sketch.query(flow_label);
+        const double error = std::abs(static_cast<double>(estimated_value) - static_cast<double>(true_value));
+        total_are += error / static_cast<double>(true_value);
+        ++count;
+    }
+    auto end_query = std::chrono::high_resolution_clock::now();
 
-        float filter_memo = memo_kb * 0.30;
-        uint32_t sketch_memo = static_cast<uint32_t>(memo_kb - filter_memo);
+    const std::chrono::duration<double> update_duration = end_update - start_update;
+    const std::chrono::duration<double> query_duration = end_query - start_query;
 
-        std::cout << "\n" << " vHLL: " << std::endl;
-        vHLL *skt_only = new vHLL(memo_kb);
-        skt_only->spreadEstimation(dataset, true_cardinality);
-        delete skt_only;
+    return {
+            method,
+            base_sketch,
+            memory_kb,
+            filter_ratio,
+            count > 0 ? total_are / count : 0.0,
+            update_duration.count() > 0 ? (dataset.size() / 1e6) / update_duration.count() : 0.0,
+            query_duration.count() > 0 ? (true_cardinality.size() / 1e6) / query_duration.count() : 0.0
+    };
+}
 
+PerFlowResult runPerFlowCase(
+        Method method,
+        BaseSketchType base_sketch,
+        uint32_t memory_kb,
+        float filter_ratio,
+        const Dataset& dataset,
+        const TrueCardinality& true_cardinality) {
+    switch (method) {
+        case Method::FlipFilter: {
+            FlipFilter filter(memory_kb,
+                              filter_ratio,
+                              FLIP_LAYERS,
+                              FLIP_BITMAP_SIZES,
+                              FLIP_RATIO_THRESHOLD,
+                              FLIP_LAYER_MEMORY_RATIOS,
+                              FLIP_DISTRIBUTE_NUM,
+                              base_sketch);
+            return evaluatePerFlowSketch(filter, method, base_sketch, memory_kb, filter_ratio, dataset, true_cardinality);
+        }
+        case Method::Couper: {
+            Couper filter(memory_kb, filter_ratio, base_sketch);
+            return evaluatePerFlowSketch(filter, method, base_sketch, memory_kb, filter_ratio, dataset, true_cardinality);
+        }
+        case Method::CouponFilter: {
+            CouponFilter filter(memory_kb, filter_ratio, base_sketch);
+            return evaluatePerFlowSketch(filter, method, base_sketch, memory_kb, filter_ratio, dataset, true_cardinality);
+        }
+        case Method::LogLogFilterSpread: {
+            LogLogFilter_Spread filter(memory_kb, filter_ratio, base_sketch);
+            filter.setPerFlowMode(true);
+            return evaluatePerFlowSketch(filter, method, base_sketch, memory_kb, filter_ratio, dataset, true_cardinality);
+        }
+        case Method::SketchOnly:
+            break;
+    }
+    throw std::runtime_error("Unknown per-flow method.");
+}
 
-        std::cout << "\n" << "FlipFilter + vHLL: " << std::endl;
-        vHLL *skt_filter = new vHLL(sketch_memo);
-        FlipFilter *filter = new FlipFilter(filter_memo, skt_filter);
-        filter->spreadEstimation(dataset, true_cardinality);
-        delete filter;
-        delete skt_filter;
-
-
-        std::cout << "\n" << "Couper + vHLL: " << std::endl;
-        vHLL *skt_couper = new vHLL(sketch_memo);
-        Couper *couper = new Couper(filter_memo, skt_couper);
-        couper->spreadEstimation(dataset, true_cardinality);
-        delete couper;
-        delete skt_couper;
-
-
-        std::cout << "\n" << "Coupon + vHLL: " << std::endl;
-        vHLL *skt_coupon = new vHLL(sketch_memo);
-        CouponFilter *coupon = new CouponFilter(filter_memo, skt_coupon);
-        coupon->spreadEstimation(dataset, true_cardinality);
-        delete coupon;
-        delete skt_coupon;
-
-
-        std::cout << "\n" << "LogLog + vHLL: " << std::endl;
-        vHLL *skt_loglogfilter = new vHLL(sketch_memo);
-        LogLogFilter_Spread *loglogfilter = new LogLogFilter_Spread(filter_memo, skt_loglogfilter);
-        loglogfilter->spreadEstimation(dataset, true_cardinality);
-        delete loglogfilter;
-        delete skt_loglogfilter;
-
-
+template<typename SketchType>
+std::vector<SSResult> evaluateSuperSpreaderSketch(
+        SketchType& sketch,
+        Method method,
+        BaseSketchType base_sketch,
+        uint32_t memory_kb,
+        float filter_ratio,
+        const Dataset& dataset,
+        const TrueCardinality& true_cardinality) {
+    for (const auto& [key, element]: dataset) {
+        sketch.update(key, element);
     }
 
+    prepareQueryIfNeeded(sketch);
 
-    auto end_time = std::chrono::steady_clock::now();
-    auto elapsed_time = std::chrono::duration_cast<std::chrono::seconds>(end_time - start_time).count();
-    std::cout << "\nExperiment ends. Elapsed time: "
-              << elapsed_time / 3600 << "h " << (elapsed_time % 3600) / 60 << "m " << elapsed_time % 60 << "s"
-              <<
-              std::endl;
+    std::vector<SSResult> results;
+    results.reserve(SS_THRESHOLDS.size());
+
+    for (uint32_t threshold: SS_THRESHOLDS) {
+        std::unordered_map<uint32_t, uint32_t> ground_truth;
+        for (const auto& [key, elements]: true_cardinality) {
+            if (elements.size() > threshold) {
+                ground_truth[key] = static_cast<uint32_t>(elements.size());
+            }
+        }
+
+        auto detected = sketch.detect(threshold);
+        uint32_t true_positive = 0;
+        double total_are = 0.0;
+
+        for (const auto& [key, estimated_value]: detected) {
+            auto gt_iter = ground_truth.find(key);
+            if (gt_iter == ground_truth.end()) continue;
+
+            ++true_positive;
+            total_are += std::abs(static_cast<double>(estimated_value) - static_cast<double>(gt_iter->second))
+                         / static_cast<double>(gt_iter->second);
+        }
+
+        const double precision = detected.empty() ? 0.0 : static_cast<double>(true_positive) / detected.size();
+        const double recall = ground_truth.empty() ? 0.0 : static_cast<double>(true_positive) / ground_truth.size();
+        const double f1 = (precision + recall > 0.0)
+                          ? 2.0 * precision * recall / (precision + recall)
+                          : 0.0;
+        const double are = true_positive > 0 ? total_are / true_positive : 0.0;
+
+        results.push_back({method, base_sketch, memory_kb, filter_ratio, threshold, f1, are});
+    }
+
+    return results;
+}
+
+std::vector<SSResult> runSuperSpreaderCase(
+        Method method,
+        BaseSketchType base_sketch,
+        uint32_t memory_kb,
+        float filter_ratio,
+        const Dataset& dataset,
+        const TrueCardinality& true_cardinality) {
+    switch (method) {
+        case Method::FlipFilter: {
+            FlipFilter filter(memory_kb,
+                              filter_ratio,
+                              FLIP_LAYERS,
+                              FLIP_BITMAP_SIZES,
+                              FLIP_RATIO_THRESHOLD,
+                              FLIP_LAYER_MEMORY_RATIOS,
+                              FLIP_DISTRIBUTE_NUM,
+                              base_sketch);
+            return evaluateSuperSpreaderSketch(filter, method, base_sketch, memory_kb, filter_ratio, dataset, true_cardinality);
+        }
+        case Method::Couper: {
+            Couper filter(memory_kb, filter_ratio, base_sketch);
+            return evaluateSuperSpreaderSketch(filter, method, base_sketch, memory_kb, filter_ratio, dataset, true_cardinality);
+        }
+        case Method::CouponFilter: {
+            CouponFilter filter(memory_kb, filter_ratio, base_sketch);
+            return evaluateSuperSpreaderSketch(filter, method, base_sketch, memory_kb, filter_ratio, dataset, true_cardinality);
+        }
+        case Method::LogLogFilterSpread: {
+            LogLogFilter_Spread filter(memory_kb, filter_ratio, base_sketch);
+            filter.setPerFlowMode(false);
+            return evaluateSuperSpreaderSketch(filter, method, base_sketch, memory_kb, filter_ratio, dataset, true_cardinality);
+        }
+        case Method::SketchOnly:
+            break;
+    }
+    throw std::runtime_error("Unknown super spreader method.");
+}
+
+PerFlowResult runSketchOnlyPerFlowCase(
+        BaseSketchType base_sketch,
+        uint32_t memory_kb,
+        const Dataset& dataset,
+        const TrueCardinality& true_cardinality) {
+    auto sketch = createSketchOnlyBaseSketch(memory_kb, base_sketch);
+    return evaluatePerFlowSketch(*sketch,
+                                 Method::SketchOnly,
+                                 base_sketch,
+                                 memory_kb,
+                                 0.0f,
+                                 dataset,
+                                 true_cardinality);
+}
+
+std::vector<SSResult> runSketchOnlySuperSpreaderCase(
+        BaseSketchType base_sketch,
+        uint32_t memory_kb,
+        const Dataset& dataset,
+        const TrueCardinality& true_cardinality) {
+    auto sketch = createSketchOnlyBaseSketch(memory_kb, base_sketch);
+    return evaluateSuperSpreaderSketch(*sketch,
+                                       Method::SketchOnly,
+                                       base_sketch,
+                                       memory_kb,
+                                       0.0f,
+                                       dataset,
+                                       true_cardinality);
+}
+
+void writePerFlowHeader(std::ofstream& out) {
+    out << "dataset,task,method,base_sketch,memory_kb,filter_ratio,"
+        << "flip_layers,flip_bitmap_sizes,flip_ratio_threshold,flip_layer_memory_ratio,flip_distribute_num,"
+        << "ARE,update_Mpps,query_Mfps\n";
+}
+
+void writePerFlowRow(std::ofstream& out, const PerFlowResult& result) {
+    const bool sketch_only = result.method == Method::SketchOnly;
+    out << datasetName(DATASET_CHOICE) << ","
+        << "PerFlow,"
+        << methodName(result.method) << ","
+        << sketchName(result.base_sketch) << ","
+        << result.memory_kb << ","
+        << formatFloat(result.filter_ratio) << ","
+        << (sketch_only ? 0 : FLIP_LAYERS) << ","
+        << (sketch_only ? "{}" : formatIntVector(FLIP_BITMAP_SIZES)) << ","
+        << (sketch_only ? formatFloat(0.0f) : formatFloat(FLIP_RATIO_THRESHOLD)) << ","
+        << (sketch_only ? "{}" : formatFloatVector(FLIP_LAYER_MEMORY_RATIOS)) << ","
+        << (sketch_only ? 0 : FLIP_DISTRIBUTE_NUM) << ","
+        << result.are << ","
+        << result.update_mpps << ","
+        << result.query_mfps << "\n";
+}
+
+void writeSSDetailHeader(std::ofstream& out) {
+    out << "dataset,task,method,base_sketch,memory_kb,filter_ratio,"
+        << "flip_layers,flip_bitmap_sizes,flip_ratio_threshold,flip_layer_memory_ratio,flip_distribute_num,"
+        << "threshold,F1,ARE\n";
+}
+
+void writeSSDetailRow(std::ofstream& out, const SSResult& result) {
+    const bool sketch_only = result.method == Method::SketchOnly;
+    out << datasetName(DATASET_CHOICE) << ","
+        << "SuperSpreader,"
+        << methodName(result.method) << ","
+        << sketchName(result.base_sketch) << ","
+        << result.memory_kb << ","
+        << formatFloat(result.filter_ratio) << ","
+        << (sketch_only ? 0 : FLIP_LAYERS) << ","
+        << (sketch_only ? "{}" : formatIntVector(FLIP_BITMAP_SIZES)) << ","
+        << (sketch_only ? formatFloat(0.0f) : formatFloat(FLIP_RATIO_THRESHOLD)) << ","
+        << (sketch_only ? "{}" : formatFloatVector(FLIP_LAYER_MEMORY_RATIOS)) << ","
+        << (sketch_only ? 0 : FLIP_DISTRIBUTE_NUM) << ","
+        << result.threshold << ","
+        << result.f1 << ","
+        << result.are << "\n";
+}
+
+void printExperimentSetting() {
+    std::cout << "Dataset: " << datasetName(DATASET_CHOICE) << std::endl;
+    std::cout << "Memory values:";
+    for (uint32_t memory_kb: MEMORY_VALUES) std::cout << " " << memory_kb;
+    std::cout << " KB" << std::endl;
+    std::cout << "Filter ratios:";
+    for (float filter_ratio: FILTER_RATIOS) std::cout << " " << formatFloat(filter_ratio);
+    std::cout << std::endl;
+    std::cout << "FlipFilter: layers=" << FLIP_LAYERS
+              << ", bitmap_sizes=" << formatIntVector(FLIP_BITMAP_SIZES)
+              << ", ratio_threshold=" << formatFloat(FLIP_RATIO_THRESHOLD)
+              << ", layer_memory=" << formatFloatVector(FLIP_LAYER_MEMORY_RATIOS)
+              << ", d=" << FLIP_DISTRIBUTE_NUM << std::endl;
+}
+
+int main() {
+    const auto start_time = std::chrono::steady_clock::now();
+    auto [dataset, true_cardinality] = loadDataset(DATASET_CHOICE);
+
+    std::cout << "Loaded " << dataset.size()
+              << " records, " << true_cardinality.size()
+              << " flows." << std::endl;
+    printExperimentSetting();
+
+    const std::string dataset_name = datasetName(DATASET_CHOICE);
+    const std::filesystem::path perflow_path =
+            resolveResultPath("main_compare_" + dataset_name + "_perflow.csv");
+    const std::filesystem::path ss_detail_path =
+            resolveResultPath("main_compare_" + dataset_name + "_ss_threshold_detail.csv");
+
+    std::ofstream perflow_out;
+    std::ofstream ss_detail_out;
+
+    if (RUN_PERFLOW_EXPERIMENT) {
+        perflow_out.open(perflow_path, std::ios::out);
+        if (!perflow_out.is_open()) {
+            throw std::runtime_error("Failed to open result file: " + perflow_path.string());
+        }
+        writePerFlowHeader(perflow_out);
+    }
+
+    if (RUN_SS_EXPERIMENT) {
+        ss_detail_out.open(ss_detail_path, std::ios::out);
+        if (!ss_detail_out.is_open()) {
+            throw std::runtime_error("Failed to open result file: " + ss_detail_path.string());
+        }
+        writeSSDetailHeader(ss_detail_out);
+    }
+
+    if (RUN_PERFLOW_EXPERIMENT) {
+        std::cout << "\nRunning per-flow spread estimation..." << std::endl;
+
+        if (RUN_SKETCH_ONLY_BASELINE) {
+            for (BaseSketchType base_sketch: PERFLOW_BASE_SKETCHES) {
+                for (uint32_t memory_kb: MEMORY_VALUES) {
+                    const auto result = runSketchOnlyPerFlowCase(base_sketch, memory_kb, dataset, true_cardinality);
+                    writePerFlowRow(perflow_out, result);
+                    std::cout << "SketchOnly + " << sketchName(base_sketch)
+                              << " memory=" << memory_kb
+                              << "KB ARE=" << result.are << std::endl;
+                }
+            }
+        }
+
+        for (BaseSketchType base_sketch: PERFLOW_BASE_SKETCHES) {
+            for (uint32_t memory_kb: MEMORY_VALUES) {
+                for (float filter_ratio: FILTER_RATIOS) {
+                    for (Method method: METHODS) {
+                        const auto result = runPerFlowCase(method,
+                                                           base_sketch,
+                                                           memory_kb,
+                                                           filter_ratio,
+                                                           dataset,
+                                                           true_cardinality);
+                        writePerFlowRow(perflow_out, result);
+                        std::cout << methodName(method) << " + " << sketchName(base_sketch)
+                                  << " memory=" << memory_kb
+                                  << "KB ARE=" << result.are << std::endl;
+                    }
+                }
+            }
+        }
+    }
+
+    if (RUN_SS_EXPERIMENT) {
+        std::cout << "\nRunning super spreader detection..." << std::endl;
+
+        if (RUN_SKETCH_ONLY_BASELINE) {
+            for (BaseSketchType base_sketch: SS_BASE_SKETCHES) {
+                for (uint32_t memory_kb: MEMORY_VALUES) {
+                    const auto results = runSketchOnlySuperSpreaderCase(base_sketch, memory_kb, dataset, true_cardinality);
+                    for (const auto& result: results) {
+                        writeSSDetailRow(ss_detail_out, result);
+                        std::cout << "SketchOnly + " << sketchName(base_sketch)
+                                  << " memory=" << memory_kb
+                                  << "KB threshold=" << result.threshold
+                                  << " F1=" << result.f1
+                                  << " ARE=" << result.are << std::endl;
+                    }
+                }
+            }
+        }
+
+        for (BaseSketchType base_sketch: SS_BASE_SKETCHES) {
+            for (uint32_t memory_kb: MEMORY_VALUES) {
+                for (float filter_ratio: FILTER_RATIOS) {
+                    for (Method method: METHODS) {
+                        const auto results = runSuperSpreaderCase(method,
+                                                                  base_sketch,
+                                                                  memory_kb,
+                                                                  filter_ratio,
+                                                                  dataset,
+                                                                  true_cardinality);
+                        for (const auto& result: results) {
+                            writeSSDetailRow(ss_detail_out, result);
+                            std::cout << methodName(method) << " + " << sketchName(base_sketch)
+                                      << " memory=" << memory_kb
+                                      << "KB threshold=" << result.threshold
+                                      << " F1=" << result.f1
+                                      << " ARE=" << result.are << std::endl;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    if (perflow_out.is_open()) perflow_out.close();
+    if (ss_detail_out.is_open()) ss_detail_out.close();
+
+    std::cout << "\nResult files:" << std::endl;
+    if (RUN_PERFLOW_EXPERIMENT) {
+        std::cout << "  " << perflow_path.string() << std::endl;
+    }
+    if (RUN_SS_EXPERIMENT) {
+        std::cout << "  " << ss_detail_path.string() << std::endl;
+    }
+
+    const auto end_time = std::chrono::steady_clock::now();
+    const auto elapsed_time = std::chrono::duration_cast<std::chrono::seconds>(end_time - start_time).count();
+    std::cout << "Elapsed time: "
+              << elapsed_time / 3600 << "h "
+              << (elapsed_time % 3600) / 60 << "m "
+              << elapsed_time % 60 << "s" << std::endl;
 
     return 0;
 }

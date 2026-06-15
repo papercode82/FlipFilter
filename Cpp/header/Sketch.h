@@ -21,10 +21,13 @@
 
 class Sketch {
 public:
+    // const std::vector<uint32_t> HASH_SEED_ARR = {1999, 5701, 9973}; //  1009, 1019, 1021
 
     virtual ~Sketch() = default;
     virtual void update(const uint32_t key, const uint32_t element) = 0;
+    virtual void prepareQuery() {}
     virtual uint32_t query(const uint32_t key) = 0;
+
     virtual std::unordered_map<uint32_t, uint32_t> detect(uint32_t threshold) = 0;
     virtual std::unordered_map<uint32_t, uint32_t> candidates() = 0;
 };

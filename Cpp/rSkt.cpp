@@ -15,6 +15,8 @@ rSkt::rSkt(uint32_t memory_kb) {
     keyseed = 41213;
     eleseed = 12412;
     num_leading_zeros = floor(log10(double(m)) / log10(2.0)); // used to locate
+    /*memset(C, 0, sizeof C);
+    memset(C1, 0, sizeof C1);*/
     if (m == 16) {
         alpha = 0.673;
     } else if (m == 32) {
@@ -117,35 +119,6 @@ uint32_t rSkt::query(uint32_t flo) {
         return static_cast<uint32_t>(val_e);
     return 1;
 }
-
-
-void rSkt::spreadEstimation(
-        const std::vector<std::pair<uint32_t, uint32_t>>& dataset,
-        const std::unordered_map<uint32_t, std::unordered_set<uint32_t>>& true_cardi) {
-    for (const auto& [key, element] : dataset) {
-        update(key, element);
-    }
-    float total_are = 0.0f;
-    uint32_t count = 0;
-
-    for (const auto& entry : true_cardi) {
-        uint32_t flow_label = entry.first;
-        uint32_t true_value = entry.second.size();
-        uint32_t estimated_value = query(flow_label);
-        if (true_value > 0) {
-            float are = std::abs(static_cast<float>(estimated_value) - static_cast<float>(true_value)) / static_cast<float>(true_value);
-            total_are += are;
-            ++count;
-        }
-    }
-    if (count > 0) {
-        float avg_are = total_are / count;
-        std::cout << "ARE: " << avg_are << std::endl;
-    } else {
-        std::cout << "No data to calculate ARE." << std::endl;
-    }
-}
-
 
 
 std::unordered_map<uint32_t, uint32_t> rSkt::detect(uint32_t threshold){

@@ -34,11 +34,6 @@ public:
     int queryReg(uint32_t*, uint32_t*);
     uint32_t query(uint32_t);
 
-    void spreadEstimation(
-            const std::vector<std::pair<uint32_t, uint32_t>>& dataset,
-            const std::unordered_map<uint32_t, std::unordered_set<uint32_t>>& true_cardi);
-
-
     std::unordered_map<uint32_t, uint32_t> detect(uint32_t threshold);
     std::unordered_map<uint32_t, uint32_t> candidates();
 };

@@ -3,14 +3,18 @@
 #include "header/vHLL.h"
 
 vHLL::vHLL(uint32_t memory_kb) {
+
     uint32_t m = ( memory_kb * 1024 * 8 )/5;
+
     uint32_t v = 32;
+
+
     this->m = m;
     this->v = v;
     this->S = new uint32_t[v];
     this->R = new uint32_t[m];
-    memset(R, 0, sizeof R);
-    srand(NULL);
+    memset(R, 0, sizeof(uint32_t) * m);
+    srand(1);
     std::set<uint32_t> seeds;
     uint32_t index = 0;
     while (seeds.size() < v)
@@ -73,6 +77,10 @@ void vHLL::update_param() {
     }
 }
 
+void vHLL::prepareQuery() {
+    update_param();
+}
+
 uint32_t vHLL::query(uint32_t key) {
     double zero_ratio_v_reg = 0;
     double sum_v_reg = 0;
@@ -101,40 +109,12 @@ uint32_t vHLL::query(uint32_t key) {
 }
 
 
-void vHLL::spreadEstimation(
-        const std::vector<std::pair<uint32_t, uint32_t>>& dataset,
-        const std::unordered_map<uint32_t, std::unordered_set<uint32_t>>& true_cardi) {
-
-    for (const auto& [key, element] : dataset) {
-        update(key, element);
-    }
-    float total_are = 0.0f;
-    int count = 0;
-    for (const auto& entry : true_cardi) {
-        uint32_t flow_label = entry.first;
-        uint32_t true_value = entry.second.size();
-        int estimated_value = query(flow_label);
-        if (true_value > 0) {
-            float are = std::abs(static_cast<float>(estimated_value) - static_cast<float>(true_value)) / static_cast<float>(true_value);
-            total_are += are;
-            ++count;
-        }
-    }
-    if (count > 0) {
-        float avg_are = total_are / count;
-        std::cout << "ARE: " << avg_are << std::endl;
-    } else {
-        std::cout << "No data to calculate ARE." << std::endl;
-    }
-}
-
 
 std::unordered_map<uint32_t, uint32_t> vHLL::detect(uint32_t threshold){
     // empty implementation
     std::unordered_map<uint32_t, uint32_t> res;
     return res;
 }
-
 
 std::unordered_map<uint32_t, uint32_t> vHLL::candidates(){
     // empty implementation

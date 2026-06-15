@@ -1,41 +1,32 @@
 # FlipFilter
 
-**FlipFilter** is a lightweight and memory-efficient filter designed for accurate flow spread measurement in high-speed networks. It targets the problem of filtering low-spread flows to reduce unnecessary overhead in downstream measurement tasks such as per-flow spread estimation and super spreader detection.
+FlipFilter is a filtering design for flow spread measurement under tight memory budgets. Compact sketches must track many flows concurrently, and their accuracy can be severely affected by numerous small-spread flows. FlipFilter mitigates this interference by suppressing small-spread flows before they enter downstream sketches.
 
-This repository provides a full implementation of FlipFilter in both C++ and P4, along with demo datasets to facilitate evaluation and reproducibility.
+This repository contains the C++ implementation used for evaluation, a P4-16 implementation for programmable switches, and small demo traces.
 
----
+```text
+FlipFilter/
++-- Cpp/                 C++ implementation
++-- P4 Implementation/   P4-16 implementation for programmable switches
++-- dataset/             Small demo traces and dataset notes
++-- README.md
+```
 
-## Repository Structure
+## C++ Implementation
 
-> FlipFilter/  
-> ├── Cpp/ # C++ implementation of FlipFilter and associated experiments  
-> ├── P4 Implementation/ # P4-16 implementation <br>├── dataset/ # Sample datasets and download instructions  
-> └── README.md # Project documentation
+The `Cpp/` directory includes FlipFilter and the baseline filters used in the evaluation:
 
----
+- FlipFilter
+- Couper
+- CouponFilter
+- LogLogFilter_Spread
 
-## C++ Implementation (`Cpp/`)
+The C++ driver runs the experiments for per-flow spread estimation and super spreader detection with the default configuration.
 
-This folder contains the full C++ implementation of FlipFilter, including:
+## P4 Implementation
 
-- Core filter logic for FlipFilter, Couper, CouponFilter, and LogLogFilter
-- Integration with downstream sketch-based estimators (e.g., vHLL, rSkt)
-- Evaluation for per-flow spread estimation and super spreader detection
-- Configurable memory settings and thresholds
+The `P4 Implementation/` directory provides a P4-16 implementation of FlipFilter on an Intel Tofino programmable switch.
 
-See the `./Cpp/README.md` file for build and run instructions.
+## Datasets
 
----
-
-## P4 Implementation (`P4 Implementation/`)
-
-We provide a P4-16 implementation of FlipFilter for deployment on programmable network switches (e.g., Barefoot Tofino ASIC).
-
-- `FlipFilter.p4`: P4 source code for implementation
-
----
-
-## Datasets (`dataset/`)
-
-This folder provides small demo traces for testing FlipFilter on three real-world datasets. Each sample corresponds to a real scenario.
+The `dataset/` directory contains small CAIDA and StackOverflow demo traces for quick testing. Full datasets should be obtained from their official sources. See `dataset/README.md` for details.

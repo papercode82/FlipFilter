@@ -17,15 +17,13 @@ private:
 public:
     vHLL(uint32_t memory_kb);
     ~vHLL() {
-        delete R;
-        delete S;
+        delete[] R;
+        delete[] S;
     }
     void update(uint32_t, uint32_t);
+    void prepareQuery() override;
     uint32_t query(uint32_t);
     void update_param();
-    void spreadEstimation(
-            const std::vector<std::pair<uint32_t, uint32_t>>& dataset,
-            const std::unordered_map<uint32_t, std::unordered_set<uint32_t>>& true_cardi);
 
     std::unordered_map<uint32_t, uint32_t> detect(uint32_t threshold);
     std::unordered_map<uint32_t, uint32_t> candidates();
